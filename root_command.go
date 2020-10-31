@@ -7,6 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
 
 	"github.com/spf13/cobra"
 )
@@ -17,7 +20,8 @@ const (
 
 func cmd(ctx context.Context) *cobra.Command {
 	rootCmd := &cmdBuilder{
-		ctx: ctx,
+		ctx:      ctx,
+		numCPUFn: runtime.NumCPU,
 	}
 	return rootCmd.cmd()
 }
@@ -29,7 +33,10 @@ type cmdBuilder struct {
 	fps         string
 	output      string
 	outputIsDir bool
+	numWorkers  int
 	stripAudio  bool
+
+	numCPUFn func() int
 }
 
 func (c *cmdBuilder) cmd() *cobra.Command {
@@ -47,6 +54,7 @@ func (c *cmdBuilder) cmd() *cobra.Command {
 	rootCmd.Flags().StringVar(&c.fps, "fps", "", "set frames per second")
 	rootCmd.Flags().BoolVar(&c.stripAudio, "no-audio", false, "remove audio from input files")
 	rootCmd.Flags().StringVar(&c.output, "output", "", "file or directory to write output")
+	rootCmd.Flags().IntVar(&c.numWorkers, "parallel", 1, "number of files to process concurrently; defaults to synchronous operation")
 
 	rootCmd.AddCommand(completionCmd(peg))
 
@@ -65,25 +73,44 @@ func (c *cmdBuilder) runE(cmd *cobra.Command, args []string) error {
 		c.outputIsDir = isDir
 	}
 
+	sem := make(chan struct{}, c.validNumWorkers())
+	errStream := make(chan error)
+
+	wg := new(sync.WaitGroup)
 	for _, arg := range args {
-		inputFile := filepath.Clean(arg)
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(rawInputFile string) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		execArgs := append(c.globalFlags(), "-i", inputFile)
-		execArgs = append(execArgs, c.inputFileFlags()...)
-		outputFile := c.outputFile(inputFile)
-		execArgs = append(execArgs, outputFile)
-
-		execCmd := exec.CommandContext(c.ctx, "ffmpeg", execArgs...)
-
-		var stdout, stderr bytes.Buffer
-		execCmd.Stdout = &stdout
-		execCmd.Stderr = &stderr
-		if err := execCmd.Run(); err != nil {
-			return err
-		}
+			errStream <- c.runFFMPEG(rawInputFile)
+		}(arg)
 	}
 
-	return nil
+	go func() {
+		wg.Wait()
+		close(sem)
+		close(errStream)
+	}()
+
+	return readErrStream(c.ctx, errStream)
+}
+
+func (c *cmdBuilder) runFFMPEG(rawInputFile string) error {
+	inputFile := filepath.Clean(rawInputFile)
+
+	execArgs := append(c.globalFlags(), "-i", inputFile)
+	execArgs = append(execArgs, c.inputFileFlags()...)
+	outputFile := c.outputFile(inputFile)
+	execArgs = append(execArgs, outputFile)
+
+	execCmd := exec.CommandContext(c.ctx, "ffmpeg", execArgs...)
+
+	var stdout, stderr bytes.Buffer
+	execCmd.Stdout = &stdout
+	execCmd.Stderr = &stderr
+	return execCmd.Run()
 }
 
 func (c *cmdBuilder) globalFlags() []string {
@@ -115,6 +142,49 @@ func (c *cmdBuilder) outputFile(inputFile string) string {
 		return setFileFormat(inputFile, c.format)
 	}
 	return inputFile
+}
+
+func (c *cmdBuilder) validNumWorkers() int {
+	numCPU := c.numCPUFn()
+	if maxWorkers := numCPU - 1; c.numWorkers > maxWorkers {
+		return maxWorkers
+	}
+	if c.numWorkers < 1 {
+		return 1
+	}
+	return c.numWorkers
+}
+
+func readErrStream(ctx context.Context, errStream <-chan error) error {
+	errs := make(map[string]struct{})
+
+	toErr := func() error {
+		if len(errs) == 0 {
+			return nil
+		}
+		errSlc := make([]string, 0, len(errs))
+		for errMsg := range errs {
+			errSlc = append(errSlc, errMsg)
+		}
+		return errors.New(strings.Join(errSlc, "\n"))
+	}
+
+Loop:
+	for {
+		select {
+		case <-ctx.Done():
+			return toErr()
+		case err, ok := <-errStream:
+			if !ok {
+				break Loop
+			}
+			if err != nil {
+				errs[err.Error()] = struct{}{}
+			}
+		}
+	}
+
+	return toErr()
 }
 
 func setFileFormat(file, format string) string {
