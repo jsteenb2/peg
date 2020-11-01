@@ -205,6 +205,7 @@ func validateOutput(output string) (bool, error) {
 			}
 			return true, nil
 		}
+		return false, nil
 	}
 	return f != nil && f.IsDir(), err
 }
