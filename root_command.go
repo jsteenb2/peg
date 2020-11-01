@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 
@@ -34,6 +36,7 @@ type cmdBuilder struct {
 	output      string
 	outputIsDir bool
 	numWorkers  int
+	speed       float64
 	stripAudio  bool
 
 	numCPUFn func() int
@@ -55,6 +58,7 @@ func (c *cmdBuilder) cmd() *cobra.Command {
 	rootCmd.Flags().BoolVar(&c.stripAudio, "no-audio", false, "remove audio from input files")
 	rootCmd.Flags().StringVar(&c.output, "output", "", "file or directory to write output")
 	rootCmd.Flags().IntVar(&c.numWorkers, "parallel", 1, "number of files to process concurrently; defaults to synchronous operation")
+	rootCmd.Flags().Float64Var(&c.speed, "speed", 0, "adjustment of videos speed")
 
 	rootCmd.AddCommand(completionCmd(peg))
 
@@ -124,10 +128,16 @@ func (c *cmdBuilder) globalFlags() []string {
 func (c *cmdBuilder) inputFileFlags() []string {
 	var flags []string
 	if c.fps != "" {
-		flags = append(flags, "-filter:v", "fps=fps="+c.fps)
+		flags = append(flags, "-vf", "fps=fps="+c.fps)
 	}
 	if c.stripAudio {
 		flags = append(flags, "-an")
+	}
+	if c.speed > 0 && c.speed != 1 {
+		flags = append(flags,
+			"-vf", fmt.Sprintf("setpts=%0.6f*PTS", 1/c.speed),
+			"-af", audioSpeedFlagValue(c.speed),
+		)
 	}
 	return flags
 }
@@ -166,6 +176,7 @@ func readErrStream(ctx context.Context, errStream <-chan error) error {
 		for errMsg := range errs {
 			errSlc = append(errSlc, errMsg)
 		}
+		sort.Strings(errSlc)
 		return errors.New(strings.Join(errSlc, "\n"))
 	}
 
@@ -194,6 +205,46 @@ func setFileFormat(file, format string) string {
 
 	ext := filepath.Ext(file)
 	return file[0:len(file)-len(ext)] + "." + format
+}
+
+// docs from ffmpeg itself: http://trac.ffmpeg.org/wiki/How%20to%20speed%20up%20/%20slow%20down%20a%20video
+func audioSpeedFlagValue(speed float64) string {
+	var output []string
+	for _, v := range splitSpeed(speed) {
+		output = append(output, fmt.Sprintf("atempo=%0.6f", v))
+	}
+	return strings.Join(output, ",")
+}
+
+func splitSpeed(speed float64) []float64 {
+	switch {
+	case speed > 2:
+		return speedUp(speed)
+	case speed < 0.5:
+		return slowDown(speed)
+	default:
+		return []float64{speed}
+	}
+}
+
+func speedUp(speed float64) []float64 {
+	var result []float64
+	for speed > 2 {
+		speed = speed / 2
+		result = append(result, 2)
+	}
+	result = append(result, speed)
+	return result
+}
+
+func slowDown(speed float64) []float64 {
+	var result []float64
+	for speed < 0.5 {
+		speed = speed / 0.5
+		result = append(result, 0.5)
+	}
+	result = append(result, speed)
+	return result
 }
 
 func validateOutput(output string) (bool, error) {
