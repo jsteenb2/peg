@@ -36,8 +36,10 @@ type cmdBuilder struct {
 	output      string
 	outputIsDir bool
 	numWorkers  int
+	showCommand bool
 	speed       float64
 	stripAudio  bool
+	volume      float64
 
 	numCPUFn func() int
 }
@@ -58,7 +60,9 @@ func (c *cmdBuilder) cmd() *cobra.Command {
 	rootCmd.Flags().BoolVar(&c.stripAudio, "no-audio", false, "remove audio from input files")
 	rootCmd.Flags().StringVar(&c.output, "output", "", "file or directory to write output")
 	rootCmd.Flags().IntVar(&c.numWorkers, "parallel", 1, "number of files to process concurrently; defaults to synchronous operation")
-	rootCmd.Flags().Float64Var(&c.speed, "speed", 0, "adjustment of videos speed")
+	rootCmd.Flags().BoolVar(&c.showCommand, "show-command", false, "shows the raw ffmpeg command to be run")
+	rootCmd.Flags().Float64Var(&c.speed, "speed", 0, "adjustment of media speed")
+	rootCmd.Flags().Float64Var(&c.volume, "volume", 1, "adjustment of media volume")
 
 	rootCmd.AddCommand(completionCmd(peg))
 
@@ -110,7 +114,9 @@ func (c *cmdBuilder) runFFMPEG(rawInputFile string) error {
 	execArgs = append(execArgs, outputFile)
 
 	execCmd := exec.CommandContext(c.ctx, "ffmpeg", execArgs...)
-
+	if c.showCommand {
+		fmt.Println("ffmpeg", strings.Join(execCmd.Args, " "))
+	}
 	var stdout, stderr bytes.Buffer
 	execCmd.Stdout = &stdout
 	execCmd.Stderr = &stderr
@@ -126,18 +132,32 @@ func (c *cmdBuilder) globalFlags() []string {
 }
 
 func (c *cmdBuilder) inputFileFlags() []string {
+	return append(c.audioFlags(), c.videoFlags()...)
+}
+
+func (c *cmdBuilder) audioFlags() []string {
+	af := audioFilter{
+		noAudio: c.stripAudio,
+		speed:   c.speed,
+		volume:  c.volume,
+	}
+
 	var flags []string
-	if c.fps != "" {
-		flags = append(flags, "-vf", "fps=fps="+c.fps)
+	for _, f := range af.flagValues() {
+		flags = append(flags, f.rawFlagArgs()...)
 	}
-	if c.stripAudio {
-		flags = append(flags, "-an")
+	return flags
+}
+
+func (c *cmdBuilder) videoFlags() []string {
+	vf := videoFilter{
+		fps:   c.fps,
+		speed: c.speed,
 	}
-	if c.speed > 0 && c.speed != 1 {
-		flags = append(flags,
-			"-vf", fmt.Sprintf("setpts=%0.6f*PTS", 1/c.speed),
-			"-af", audioSpeedFlagValue(c.speed),
-		)
+
+	var flags []string
+	for _, f := range vf.flagValue() {
+		flags = append(flags, f.rawFlagArgs()...)
 	}
 	return flags
 }
@@ -163,6 +183,68 @@ func (c *cmdBuilder) validNumWorkers() int {
 		return 1
 	}
 	return c.numWorkers
+}
+
+type flagVal struct {
+	name   string
+	values []string
+}
+
+func (f flagVal) rawFlagArgs() []string {
+	out := []string{f.name}
+	if len(f.values) > 0 {
+		out = append(out, strings.Join(f.values, ","))
+	}
+	return out
+}
+
+type audioFilter struct {
+	noAudio bool
+	speed   float64
+	volume  float64
+}
+
+func (a audioFilter) flagValues() []flagVal {
+	if a.noAudio {
+		return []flagVal{{name: "-an"}}
+	}
+
+	ff := flagVal{
+		name: "-af",
+	}
+	if a.speed > 0 && a.speed != 1 {
+		ff.values = append(ff.values, audioSpeedFlagValue(a.speed))
+	}
+
+	if a.volume < 0 {
+		a.volume = 0
+	}
+	if a.volume != 1 {
+		ff.values = append(ff.values, fmt.Sprintf("volume=%0.6f", a.volume))
+	}
+	if len(ff.values) == 0 {
+		return nil
+	}
+	return []flagVal{ff}
+}
+
+type videoFilter struct {
+	fps   string
+	speed float64
+}
+
+func (v videoFilter) flagValue() []flagVal {
+	ff := flagVal{name: "-vf"}
+	if v.fps != "" {
+		ff.values = append(ff.values, "fps=fps="+v.fps)
+	}
+	if v.speed > 0 && v.speed != 1 {
+		ff.values = append(ff.values, fmt.Sprintf("setpts=%0.6f*PTS", 1/v.speed))
+	}
+	if len(ff.values) == 0 {
+		return nil
+	}
+	return []flagVal{ff}
 }
 
 func readErrStream(ctx context.Context, errStream <-chan error) error {
