@@ -44,6 +44,7 @@ type cmdBuilder struct {
 	outputIsDir bool
 	numWorkers  int
 	quiet       bool
+	reverse     bool
 	scale       string
 	showCommand bool
 	speed       float64
@@ -73,6 +74,7 @@ func (c *cmdBuilder) cmd() *cobra.Command {
 	rootCmd.Flags().StringVar(&c.output, "output", "", "file or directory to write output")
 	rootCmd.Flags().IntVar(&c.numWorkers, "parallel", 1, "number of files to process concurrently; defaults to synchronous operation")
 	rootCmd.Flags().BoolVar(&c.quiet, "quiet", false, "trim ffmpeg output")
+	rootCmd.Flags().BoolVar(&c.reverse, "reverse", false, "reverse the video and audio of media provided")
 	rootCmd.Flags().StringVar(&c.scale, "scale", "", "scale media")
 	rootCmd.Flags().BoolVar(&c.showCommand, "show-command", false, "shows the raw ffmpeg command to be run")
 	rootCmd.Flags().Float64Var(&c.speed, "speed", 0, "adjustment of media speed")
@@ -157,6 +159,7 @@ func (c *cmdBuilder) inputFileFlags() []string {
 func (c *cmdBuilder) audioFlags() []string {
 	af := audioFilter{
 		noAudio: c.stripAudio,
+		reverse: c.reverse,
 		speed:   c.speed,
 		volume:  c.volume,
 	}
@@ -170,10 +173,11 @@ func (c *cmdBuilder) audioFlags() []string {
 
 func (c *cmdBuilder) videoFlags() []string {
 	vf := videoFilter{
-		crop:  c.crop,
-		fps:   c.fps,
-		scale: c.scale,
-		speed: c.speed,
+		crop:    c.crop,
+		fps:     c.fps,
+		reverse: c.reverse,
+		scale:   c.scale,
+		speed:   c.speed,
 	}
 
 	var flags []string
@@ -221,6 +225,7 @@ func (f flagVal) rawFlagArgs() []string {
 
 type audioFilter struct {
 	noAudio bool    // https://walterebert.com/blog/removing-audio-from-video-with-ffmpeg/
+	reverse bool    // https://ffmpeg.org/ffmpeg-filters.html#areverse
 	speed   float64 // https://trac.ffmpeg.org/wiki/How%20to%20speed%20up%20/%20slow%20down%20a%20video
 	volume  string  // https://trac.ffmpeg.org/wiki/AudioVolume
 }
@@ -232,6 +237,9 @@ func (a audioFilter) flagValues() []flagVal {
 
 	ff := flagVal{
 		name: "-af",
+	}
+	if a.reverse {
+		ff.values = append(ff.values, "areverse")
 	}
 	if a.speed > 0 && a.speed != 1 {
 		ff.values = append(ff.values, audioSpeedFlagValue(a.speed))
@@ -247,10 +255,11 @@ func (a audioFilter) flagValues() []flagVal {
 }
 
 type videoFilter struct {
-	crop  string  // https://www.linuxuprising.com/2020/01/ffmpeg-how-to-crop-videos-with-examples.html
-	fps   string  // https://trac.ffmpeg.org/wiki/ChangingFrameRate
-	scale string  // https://trac.ffmpeg.org/wiki/Scaling
-	speed float64 //https://trac.ffmpeg.org/wiki/How%20to%20speed%20up%20/%20slow%20down%20a%20video
+	crop    string  // https://www.linuxuprising.com/2020/01/ffmpeg-how-to-crop-videos-with-examples.html
+	fps     string  // https://trac.ffmpeg.org/wiki/ChangingFrameRate
+	reverse bool    // https://ffmpeg.org/ffmpeg-filters.html#reverse
+	scale   string  // https://trac.ffmpeg.org/wiki/Scaling
+	speed   float64 //https://trac.ffmpeg.org/wiki/How%20to%20speed%20up%20/%20slow%20down%20a%20video
 }
 
 func (v videoFilter) flagValue() []flagVal {
@@ -260,6 +269,9 @@ func (v videoFilter) flagValue() []flagVal {
 	}
 	if v.fps != "" {
 		ff.values = append(ff.values, "fps=fps="+v.fps)
+	}
+	if v.reverse {
+		ff.values = append(ff.values, "reverse")
 	}
 	if v.scale != "" {
 		ff.values = append(ff.values, "scale="+v.scale)
