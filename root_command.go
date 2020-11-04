@@ -30,6 +30,7 @@ func cmd(ctx context.Context) *cobra.Command {
 
 type cmdBuilder struct {
 	ctx         context.Context
+	crop        string
 	force       bool
 	format      string
 	fps         string
@@ -54,6 +55,7 @@ func (c *cmdBuilder) cmd() *cobra.Command {
 		SilenceUsage: true,
 	}
 
+	rootCmd.Flags().StringVar(&c.crop, "crop", "", "crop original media to provided dimensions")
 	rootCmd.Flags().BoolVar(&c.force, "force", false, "force files to be override existing files")
 	rootCmd.Flags().StringVar(&c.format, "format", "", "convert input to desired format")
 	rootCmd.Flags().StringVar(&c.fps, "fps", "", "set frames per second")
@@ -151,6 +153,7 @@ func (c *cmdBuilder) audioFlags() []string {
 
 func (c *cmdBuilder) videoFlags() []string {
 	vf := videoFilter{
+		crop:  c.crop,
 		fps:   c.fps,
 		speed: c.speed,
 	}
@@ -229,12 +232,16 @@ func (a audioFilter) flagValues() []flagVal {
 }
 
 type videoFilter struct {
+	crop  string
 	fps   string
 	speed float64
 }
 
 func (v videoFilter) flagValue() []flagVal {
 	ff := flagVal{name: "-vf"}
+	if v.crop != "" {
+		ff.values = append(ff.values, "crop="+v.crop)
+	}
 	if v.fps != "" {
 		ff.values = append(ff.values, "fps=fps="+v.fps)
 	}
