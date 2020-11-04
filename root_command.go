@@ -45,6 +45,7 @@ type cmdBuilder struct {
 	numWorkers  int
 	quiet       bool
 	reverse     bool
+	rotate      string
 	scale       string
 	showCommand bool
 	speed       float64
@@ -75,6 +76,7 @@ func (c *cmdBuilder) cmd() *cobra.Command {
 	rootCmd.Flags().IntVar(&c.numWorkers, "parallel", 1, "number of files to process concurrently; defaults to synchronous operation")
 	rootCmd.Flags().BoolVar(&c.quiet, "quiet", false, "trim ffmpeg output")
 	rootCmd.Flags().BoolVar(&c.reverse, "reverse", false, "reverse the video and audio of media provided")
+	rootCmd.Flags().StringVar(&c.rotate, "rotate", "", "rotate the video")
 	rootCmd.Flags().StringVar(&c.scale, "scale", "", "scale media")
 	rootCmd.Flags().BoolVar(&c.showCommand, "show-command", false, "shows the raw ffmpeg command to be run")
 	rootCmd.Flags().Float64Var(&c.speed, "speed", 0, "adjustment of media speed")
@@ -176,6 +178,7 @@ func (c *cmdBuilder) videoFlags() []string {
 		crop:    c.crop,
 		fps:     c.fps,
 		reverse: c.reverse,
+		rotate:  c.rotate,
 		scale:   c.scale,
 		speed:   c.speed,
 	}
@@ -258,6 +261,7 @@ type videoFilter struct {
 	crop    string  // https://www.linuxuprising.com/2020/01/ffmpeg-how-to-crop-videos-with-examples.html
 	fps     string  // https://trac.ffmpeg.org/wiki/ChangingFrameRate
 	reverse bool    // https://ffmpeg.org/ffmpeg-filters.html#reverse
+	rotate  string  // http://ffmpeg.org/ffmpeg-filters.html#transpose
 	scale   string  // https://trac.ffmpeg.org/wiki/Scaling
 	speed   float64 //https://trac.ffmpeg.org/wiki/How%20to%20speed%20up%20/%20slow%20down%20a%20video
 }
@@ -269,6 +273,9 @@ func (v videoFilter) flagValue() []flagVal {
 	}
 	if v.fps != "" {
 		ff.values = append(ff.values, "fps=fps="+v.fps)
+	}
+	if v.rotate != "" {
+		ff.values = append(ff.values, "transpose="+v.rotate)
 	}
 	if v.reverse {
 		ff.values = append(ff.values, "reverse")
