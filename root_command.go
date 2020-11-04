@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,13 +24,18 @@ const (
 func cmd(ctx context.Context) *cobra.Command {
 	rootCmd := &cmdBuilder{
 		ctx:      ctx,
+		out:      os.Stdout,
+		err:      os.Stderr,
 		numCPUFn: runtime.NumCPU,
 	}
 	return rootCmd.cmd()
 }
 
 type cmdBuilder struct {
-	ctx         context.Context
+	ctx context.Context
+	out io.Writer
+	err io.Writer
+
 	crop        string
 	force       bool
 	format      string
@@ -37,10 +43,12 @@ type cmdBuilder struct {
 	output      string
 	outputIsDir bool
 	numWorkers  int
+	quiet       bool
+	scale       string
 	showCommand bool
 	speed       float64
 	stripAudio  bool
-	volume      float64
+	volume      string
 
 	numCPUFn func() int
 }
@@ -54,6 +62,8 @@ func (c *cmdBuilder) cmd() *cobra.Command {
 		Args:         cobra.MinimumNArgs(1),
 		SilenceUsage: true,
 	}
+	rootCmd.SetOut(c.out)
+	rootCmd.SetErr(c.err)
 
 	rootCmd.Flags().StringVar(&c.crop, "crop", "", "crop original media to provided dimensions")
 	rootCmd.Flags().BoolVar(&c.force, "force", false, "force files to be override existing files")
@@ -62,9 +72,11 @@ func (c *cmdBuilder) cmd() *cobra.Command {
 	rootCmd.Flags().BoolVar(&c.stripAudio, "no-audio", false, "remove audio from input files")
 	rootCmd.Flags().StringVar(&c.output, "output", "", "file or directory to write output")
 	rootCmd.Flags().IntVar(&c.numWorkers, "parallel", 1, "number of files to process concurrently; defaults to synchronous operation")
+	rootCmd.Flags().BoolVar(&c.quiet, "quiet", false, "trim ffmpeg output")
+	rootCmd.Flags().StringVar(&c.scale, "scale", "", "scale media")
 	rootCmd.Flags().BoolVar(&c.showCommand, "show-command", false, "shows the raw ffmpeg command to be run")
 	rootCmd.Flags().Float64Var(&c.speed, "speed", 0, "adjustment of media speed")
-	rootCmd.Flags().Float64Var(&c.volume, "volume", 1, "adjustment of media volume")
+	rootCmd.Flags().StringVar(&c.volume, "volume", "", "adjustment of media volume")
 
 	rootCmd.AddCommand(completionCmd(peg))
 
@@ -119,9 +131,14 @@ func (c *cmdBuilder) runFFMPEG(rawInputFile string) error {
 	if c.showCommand {
 		fmt.Println("ffmpeg", strings.Join(execCmd.Args, " "))
 	}
-	var stdout, stderr bytes.Buffer
-	execCmd.Stdout = &stdout
-	execCmd.Stderr = &stderr
+
+	execCmd.Stdout, execCmd.Stderr = c.out, c.err
+
+	if c.quiet {
+		var stdout, stderr bytes.Buffer
+		execCmd.Stdout = &stdout
+		execCmd.Stderr = &stderr
+	}
 	return execCmd.Run()
 }
 
@@ -155,6 +172,7 @@ func (c *cmdBuilder) videoFlags() []string {
 	vf := videoFilter{
 		crop:  c.crop,
 		fps:   c.fps,
+		scale: c.scale,
 		speed: c.speed,
 	}
 
@@ -202,9 +220,9 @@ func (f flagVal) rawFlagArgs() []string {
 }
 
 type audioFilter struct {
-	noAudio bool
-	speed   float64
-	volume  float64
+	noAudio bool    // https://walterebert.com/blog/removing-audio-from-video-with-ffmpeg/
+	speed   float64 // https://trac.ffmpeg.org/wiki/How%20to%20speed%20up%20/%20slow%20down%20a%20video
+	volume  string  // https://trac.ffmpeg.org/wiki/AudioVolume
 }
 
 func (a audioFilter) flagValues() []flagVal {
@@ -219,11 +237,8 @@ func (a audioFilter) flagValues() []flagVal {
 		ff.values = append(ff.values, audioSpeedFlagValue(a.speed))
 	}
 
-	if a.volume < 0 {
-		a.volume = 0
-	}
-	if a.volume != 1 {
-		ff.values = append(ff.values, fmt.Sprintf("volume=%0.6f", a.volume))
+	if a.volume != "" {
+		ff.values = append(ff.values, fmt.Sprintf("volume=%s", a.volume))
 	}
 	if len(ff.values) == 0 {
 		return nil
@@ -232,9 +247,10 @@ func (a audioFilter) flagValues() []flagVal {
 }
 
 type videoFilter struct {
-	crop  string
-	fps   string
-	speed float64
+	crop  string  // https://www.linuxuprising.com/2020/01/ffmpeg-how-to-crop-videos-with-examples.html
+	fps   string  // https://trac.ffmpeg.org/wiki/ChangingFrameRate
+	scale string  // https://trac.ffmpeg.org/wiki/Scaling
+	speed float64 //https://trac.ffmpeg.org/wiki/How%20to%20speed%20up%20/%20slow%20down%20a%20video
 }
 
 func (v videoFilter) flagValue() []flagVal {
@@ -244,6 +260,9 @@ func (v videoFilter) flagValue() []flagVal {
 	}
 	if v.fps != "" {
 		ff.values = append(ff.values, "fps=fps="+v.fps)
+	}
+	if v.scale != "" {
+		ff.values = append(ff.values, "scale="+v.scale)
 	}
 	if v.speed > 0 && v.speed != 1 {
 		ff.values = append(ff.values, fmt.Sprintf("setpts=%0.6f*PTS", 1/v.speed))
