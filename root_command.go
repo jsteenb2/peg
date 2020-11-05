@@ -90,6 +90,9 @@ func (c *cmdBuilder) cmd() *cobra.Command {
 }
 
 func (c *cmdBuilder) runE(cmd *cobra.Command, args []string) error {
+	cmd.SetOut(c.out)
+	cmd.SetErr(c.err)
+
 	if c.output != "" {
 		isDir, err := validateOutput(c.output)
 		if err != nil {
@@ -129,7 +132,7 @@ func (c *cmdBuilder) runFFMPEG(rawInputFile string) error {
 	inputFile := filepath.Clean(rawInputFile)
 
 	execArgs := append(c.globalFlags(), "-i", inputFile)
-	execArgs = append(execArgs, c.inputFileFlags()...)
+	execArgs = append(execArgs, c.inputFileFlags(rawInputFile)...)
 	outputFile := c.outputFile(inputFile)
 	execArgs = append(execArgs, outputFile)
 
@@ -156,8 +159,12 @@ func (c *cmdBuilder) globalFlags() []string {
 	return flags
 }
 
-func (c *cmdBuilder) inputFileFlags() []string {
-	return append(c.commonFlags(), append(c.audioFlags(), c.videoFlags()...)...)
+func (c *cmdBuilder) inputFileFlags(inputFileExt string) []string {
+	flags := append(c.commonFlags(), c.videoFlags()...)
+	if inputFileExt != ".gif" && c.format != "gif" {
+		flags = append(flags, c.audioFlags()...)
+	}
+	return flags
 }
 
 func (c *cmdBuilder) commonFlags() []string {
