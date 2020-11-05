@@ -85,6 +85,13 @@ func (c *cmdBuilder) cmd() *cobra.Command {
 	rootCmd.Flags().StringVar(&c.volume, "volume", "", "adjustment of media volume")
 
 	rootCmd.AddCommand(completionCmd(peg))
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Prints the peg version",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("%s version %s (git commit: %s)\n", peg, version, commit)
+		},
+	})
 
 	return &rootCmd
 }

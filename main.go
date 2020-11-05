@@ -7,6 +7,11 @@ import (
 	"syscall"
 )
 
+var (
+	version = ""
+	commit  = ""
+)
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan os.Signal, 1)
