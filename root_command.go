@@ -50,6 +50,7 @@ type cmdBuilder struct {
 	showCommand bool
 	speed       float64
 	stripAudio  bool
+	trim        string
 	volume      string
 
 	numCPUFn func() int
@@ -80,6 +81,7 @@ func (c *cmdBuilder) cmd() *cobra.Command {
 	rootCmd.Flags().StringVar(&c.scale, "scale", "", "scale media")
 	rootCmd.Flags().BoolVar(&c.showCommand, "show-command", false, "shows the raw ffmpeg command to be run")
 	rootCmd.Flags().Float64Var(&c.speed, "speed", 0, "adjustment of media speed")
+	rootCmd.Flags().StringVar(&c.trim, "trim", "", "trim content of the media")
 	rootCmd.Flags().StringVar(&c.volume, "volume", "", "adjustment of media volume")
 
 	rootCmd.AddCommand(completionCmd(peg))
@@ -155,7 +157,19 @@ func (c *cmdBuilder) globalFlags() []string {
 }
 
 func (c *cmdBuilder) inputFileFlags() []string {
-	return append(c.audioFlags(), c.videoFlags()...)
+	return append(c.commonFlags(), append(c.audioFlags(), c.videoFlags()...)...)
+}
+
+func (c *cmdBuilder) commonFlags() []string {
+	cf := commonFilter{
+		trim: c.trim,
+	}
+
+	var flags []string
+	for _, f := range cf.flagValues() {
+		flags = append(flags, f.rawFlagArgs()...)
+	}
+	return flags
 }
 
 func (c *cmdBuilder) audioFlags() []string {
@@ -226,6 +240,30 @@ func (f flagVal) rawFlagArgs() []string {
 	return out
 }
 
+type commonFilter struct {
+	trim string // https://superuser.com/questions/681885/how-can-i-remove-multiple-segments-from-a-video-using-ffmpeg
+}
+
+func (c commonFilter) flagValues() []flagVal {
+	var flags []flagVal
+	if trimParts := strings.Split(c.trim, ","); len(trimParts) == 2 {
+		start, end := trimParts[0], trimParts[1]
+		if start != "" {
+			flags = append(flags, flagVal{
+				name:   "-ss",
+				values: []string{start},
+			})
+		}
+		if end != "" {
+			flags = append(flags, flagVal{
+				name:   "-to",
+				values: []string{end},
+			})
+		}
+	}
+	return flags
+}
+
 type audioFilter struct {
 	noAudio bool    // https://walterebert.com/blog/removing-audio-from-video-with-ffmpeg/
 	reverse bool    // https://ffmpeg.org/ffmpeg-filters.html#areverse
@@ -247,13 +285,14 @@ func (a audioFilter) flagValues() []flagVal {
 	if a.speed > 0 && a.speed != 1 {
 		ff.values = append(ff.values, audioSpeedFlagValue(a.speed))
 	}
-
 	if a.volume != "" {
 		ff.values = append(ff.values, fmt.Sprintf("volume=%s", a.volume))
 	}
+
 	if len(ff.values) == 0 {
 		return nil
 	}
+
 	return []flagVal{ff}
 }
 
@@ -286,9 +325,11 @@ func (v videoFilter) flagValue() []flagVal {
 	if v.speed > 0 && v.speed != 1 {
 		ff.values = append(ff.values, fmt.Sprintf("setpts=%0.6f*PTS", 1/v.speed))
 	}
+
 	if len(ff.values) == 0 {
 		return nil
 	}
+
 	return []flagVal{ff}
 }
 
